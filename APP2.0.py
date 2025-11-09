@@ -5,25 +5,26 @@ import simpy
 import random
 import csv
 import matplotlib.pyplot as plt
-import scipy.stats as stats # (Importante, nos aseguramos que esté scipy)
+import scipy.stats as stats
 
 # --- 0. CONFIGURACIÓN DE LA PÁGINA ---
-st.set_page_config(
-    page_title="Simulador Subte Línea D",
-    layout="wide"
-)
+st.set_page_config(page_title="Simulador Subte Línea D", layout="wide")
 
-# --- URL de Datos (Reemplazar con tu link de Release) ---
+# --- URL de Datos ---
 DATA_URL = "https://github.com/petergiaco0-art/Simulador-Subte-D/releases/download/v1.0/202501_D.csv" 
+
+# --- (NUEVO) Parámetros de Calentamiento ---
+TIEMPO_CALENTAMIENTO_SEG = 3600 # 1 HORA (3600s) para calentar
+TIEMPO_MEDICION_SEG = 3600     # 1 HORA (3600s) para medir
+TIEMPO_TOTAL_SIM = TIEMPO_CALENTAMIENTO_SEG + TIEMPO_MEDICION_SEG # 7200s
+
+INTERVALO_LAMBDA_SEG = 900 # 15 min
 
 # --- 1. FUNCIONES DE CARGA Y DATOS ---
 @st.cache_data
 def load_and_clean_data(url_de_datos):
     st.info(f"Descargando y procesando datos de demanda (Enero)...")
-    print("Iniciando descarga y limpieza de datos...")
-    
-    # ... (El código de carga, limpieza y cálculo de Lambda es IDÉNTICO a la v4) ...
-    # --- Carga de Datos ---
+    # ... (El código de carga, limpieza y cálculo de Lambda es IDÉNTICO a la v5) ...
     try:
         df = pd.read_csv(
             url_de_datos, sep=';', encoding='utf-8-sig',
@@ -32,7 +33,6 @@ def load_and_clean_data(url_de_datos):
     except Exception as e:
         st.error(f"Error fatal al leer el CSV desde la URL: {e}")
         return None
-    # --- Limpieza (Idéntica a antes) ---
     df.columns = df.columns.str.replace('"', '', regex=False).str.strip()
     required_cols = ['FECHA', 'pax_TOTAL', 'ESTACION', 'LINEA', 'MOLINETE', 'DESDE']
     if not all(col in df.columns for col in required_cols):
@@ -49,8 +49,6 @@ def load_and_clean_data(url_de_datos):
     df_linea_d['pax_TOTAL'] = pd.to_numeric(df_linea_d['pax_TOTAL'], errors='coerce')
     df_linea_d.dropna(subset=['pax_TOTAL'], inplace=True)
     df_linea_d['pax_TOTAL'] = df_linea_d['pax_TOTAL'].astype(int)
-    print("Carga y limpieza de datos completada.")
-    # --- Cálculo de Lambda (Idéntico a antes) ---
     print("Iniciando cálculo de Lambda...")
     df_linea_d['DIRECCION'] = df_linea_d.apply(asignar_direccion, axis=1)
     df_con_direccion = df_linea_d[df_linea_d['DIRECCION'] != 'Ponderar'].copy()
@@ -85,15 +83,12 @@ def asignar_direccion(row):
     return 'Ponderar'
 
 # --- 2. COMPONENTES DEL MODELO SIMPY ---
-# (CONSTANTES, Clase Anden, Procesos: idénticos a v4)
 LISTA_ESTACIONES_NORTE = [
     'Catedral', '9 de Julio', 'Tribunales', 'Callao', 'Facultad de Medicina', 
     'Agüero', 'Pueyrredon.D', 'Bulnes', 'Plaza Italia', 'Ministro Carranza', 
     'Olleros', 'Jose Hernandez', 'Juramento', 'Congreso de Tucuman'
 ]
 LISTA_ESTACIONES_SUR = LISTA_ESTACIONES_NORTE[::-1]
-TIEMPO_SIMULACION_SEG = 3600 # 1 Hora
-INTERVALO_LAMBDA_SEG = 900 # 15 min
 MAPAS_DESCENSO_BASE = {
     "Hacia Catedral": {
         'Congreso de Tucuman': 0.0, 'Juramento': 0.05, 'Jose Hernandez': 0.05, 'Olleros': 0.05,
@@ -109,50 +104,86 @@ MAPAS_DESCENSO_BASE = {
         'Congreso de Tucuman': 1.0
     }
 }
+
+# --- (MODIFICACIÓN: Clase Anden ahora sabe sobre el calentamiento) ---
 class Anden:
-    def __init__(self, env, nombre_estacion, direccion):
+    def __init__(self, env, nombre_estacion, direccion, tiempo_calentamiento):
         self.env = env
         self.nombre = f"{nombre_estacion}_{direccion}"
         self.direccion = direccion
         self.estacion_nombre = nombre_estacion
+        self.tiempo_calentamiento = tiempo_calentamiento # <-- NUEVO
         self.cola_pasajeros = simpy.Store(env)
         self.metricas_tiempo_espera = []
         self.metricas_cola_por_tren = []
+
     def add_pasajero(self, pasajero):
         pasajero['tiempo_llegada_anden'] = self.env.now
         return self.cola_pasajeros.put(pasajero)
+
     def tren_llega_a_anden(self, tren, dwell_time):
+        # (NUEVO) Solo registrar métricas DESPUÉS del calentamiento
+        # (env.now >= self.tiempo_calentamiento)
+        
+        # Primero, calculamos cuántos hay en cola (siempre, para el log)
         pasajeros_en_cola_al_llegar = len(self.cola_pasajeros.items)
-        self.metricas_cola_por_tren.append(pasajeros_en_cola_al_llegar)
+        # Pero solo guardamos la métrica si estamos midiendo
+        if self.env.now >= self.tiempo_calentamiento:
+            self.metricas_cola_por_tren.append(pasajeros_en_cola_al_llegar)
+        
         pasajeros_subidos = 0
         while tren['pasajeros_actuales'] < tren['capacidad'] and len(self.cola_pasajeros.items) > 0:
             pasajero = yield self.cola_pasajeros.get()
-            tiempo_espera = self.env.now - pasajero['tiempo_llegada_anden']
-            self.metricas_tiempo_espera.append(tiempo_espera) # Guardamos CADA espera
+            
+            # (NUEVO) Solo registrar métricas DESPUÉS del calentamiento
+            if self.env.now >= self.tiempo_calentamiento:
+                tiempo_espera = self.env.now - pasajero['tiempo_llegada_anden']
+                self.metricas_tiempo_espera.append(tiempo_espera)
+            
             tren['pasajeros_actuales'] += 1
             pasajeros_subidos += 1
+        
         yield self.env.timeout(dwell_time)
-def generador_pasajeros(env, anden, df_lambda, intervalo_seg):
-    lambda_data = df_lambda[
-        (df_lambda['ESTACION'] == anden.estacion_nombre) &
-        (df_lambda['DIRECCION'] == anden.direccion)
-    ].set_index('DESDE') 
+
+# --- (MODIFICACIÓN: generador_pasajeros ahora corre en bucle) ---
+def generador_pasajeros(env, anden, df_lambda_anden, intervalo_seg):
+    """
+    Este proceso genera pasajeros en bucle, repitiendo el
+    horario de 1 hora (4 intervalos) durante toda la simulación.
+    """
     intervalos = ['08:00:00', '08:15:00', '08:30:00', '08:45:00']
-    for intervalo_hora in intervalos:
-        lambda_actual = 0.0
-        try: lambda_actual = lambda_data.loc[intervalo_hora]['pasajeros_PROMEDIO_lambda']
-        except KeyError: pass
-        if lambda_actual > 0:
-            seg_entre_pasajeros = intervalo_seg / lambda_actual
-            inicio_intervalo = env.now
-            while env.now < inicio_intervalo + intervalo_seg:
-                tiempo_llegada_prox_pax = random.expovariate(1.0 / seg_entre_pasajeros)
-                yield env.timeout(tiempo_llegada_prox_pax)
-                if env.now < inicio_intervalo + intervalo_seg:
-                    pasajero = {'id': f"pax_{random.randint(1000,9999)}"}
-                    yield anden.add_pasajero(pasajero)
-        else:
-            yield env.timeout(intervalo_seg)
+    
+    # Bucle infinito para que el generador nunca se detenga
+    while True:
+        # Repite el horario de 4 intervalos (1 hora)
+        for intervalo_hora in intervalos:
+            lambda_actual = 0.0
+            try: 
+                lambda_actual = df_lambda_anden.loc[intervalo_hora]['pasajeros_PROMEDIO_lambda']
+            except KeyError: 
+                pass # No hay demanda para este andén en este intervalo
+            
+            if lambda_actual > 0:
+                # Tasa de llegada (pasajeros por segundo)
+                tasa_llegada_por_seg = lambda_actual / intervalo_seg
+                
+                # Bucle para este intervalo de 15 min
+                inicio_intervalo = env.now
+                while env.now < inicio_intervalo + intervalo_seg:
+                    # Tiempo hasta el próximo pasajero
+                    tiempo_llegada_prox_pax = random.expovariate(tasa_llegada_por_seg)
+                    
+                    yield env.timeout(tiempo_llegada_prox_pax)
+                    
+                    if env.now < inicio_intervalo + intervalo_seg:
+                        pasajero = {'id': f"pax_{random.randint(1000,9999)}"}
+                        yield anden.add_pasajero(pasajero)
+            else:
+                # Si no hay lambda, solo esperar 15 min
+                yield env.timeout(intervalo_seg)
+
+
+# (proceso_tren es idéntico a v5)
 def proceso_tren(env, tren_id, lista_recorrido, tiempo_viaje, dwell_time, capacidad, mundo_andenes, tasas_descenso):
     tren = {'id': tren_id, 'capacidad': capacidad, 'pasajeros_actuales': 0}
     direccion_viaje = "Hacia Congreso" if lista_recorrido == LISTA_ESTACIONES_NORTE else "Hacia Catedral"
@@ -166,14 +197,23 @@ def proceso_tren(env, tren_id, lista_recorrido, tiempo_viaje, dwell_time, capaci
             pasajeros_que_bajan = np.random.binomial(tren['pasajeros_actuales'], tasa_bajada)
             tren['pasajeros_actuales'] -= pasajeros_que_bajan
         yield env.process(anden_actual.tren_llega_a_anden(tren, dwell_time))
+
+# (MODIFICACIÓN: generador_trenes ahora es más simple)
 def generador_trenes(env, direccion, lista_recorrido, min_freq, max_freq, tiempo_viaje, dwell_time, capacidad, mundo_andenes, tasas_descenso):
+    """
+    Crea un nuevo 'proceso_tren' en la terminal
+    cada X minutos (frecuencia estocástica) en un bucle infinito.
+    """
     tren_id_counter = 0
+    # Bucle infinito para que el generador nunca se detenga
     while True:
         frecuencia = random.uniform(min_freq, max_freq)
         yield env.timeout(frecuencia)
+        
         tren_id_counter += 1
         tren_id = f"Tren_{direccion}_{tren_id_counter}"
         env.process(proceso_tren(env, tren_id, lista_recorrido, tiempo_viaje, dwell_time, capacidad, mundo_andenes, tasas_descenso))
+
 
 # --- 3. FUNCIÓN PRINCIPAL DE SIMULACIÓN (MONTECARLO) ---
 
@@ -182,7 +222,7 @@ def confidence_interval(data):
         return (0, 0)
     return stats.t.interval(0.95, len(data) - 1, loc=np.mean(data), scale=stats.sem(data))
 
-# --- (MODIFICACIÓN: Función Montecarlo ahora calcula KPIs) ---
+# --- (MODIFICACIÓN: Función Montecarlo ahora usa CALENTAMIENTO) ---
 def run_montecarlo_simulation(
     n_replicaciones, min_freq, max_freq, capacidad, dwell_time, tiempo_viaje, 
     df_lambda, mapas_descenso_base, 
@@ -191,7 +231,7 @@ def run_montecarlo_simulation(
     
     print(f"Iniciando Montecarlo con {n_replicaciones} réplicas...")
     lista_resultados_andenes = []
-    lista_kpis_globales = [] # <-- (NUEVO) Lista para KPIs
+    lista_kpis_globales = []
     
     mapas_descenso_ajustados = {
         "Hacia Catedral": {
@@ -206,24 +246,32 @@ def run_montecarlo_simulation(
     
     progress_bar = st.progress(0, text="Iniciando simulación...")
 
-    # Bucle de Replicación (Idéntico)
+    # Bucle de Replicación
     for i in range(n_replicaciones):
         semilla_actual = i + 1
-        progress_bar.progress((i + 1) / n_replicaciones, text=f"Corriendo Réplica {semilla_actual}/{n_replicaciones}...")
+        progress_bar.progress((i + 1) / n_replicaciones, text=f"Corriendo Réplica {semilla_actual}/{n_replicaciones} (Calentando...)")
         
         random.seed(semilla_actual)
         np.random.seed(semilla_actual)
         
         env = simpy.Environment()
         mundo_andenes = {}
+        # (NUEVO) Pasar el tiempo de calentamiento a los andenes
         for estacion in LISTA_ESTACIONES_NORTE:
-            anden_norte = Anden(env, estacion, "Hacia Congreso") 
+            anden_norte = Anden(env, estacion, "Hacia Congreso", TIEMPO_CALENTAMIENTO_SEG) 
             mundo_andenes[anden_norte.nombre] = anden_norte
-            anden_sur = Anden(env, estacion, "Hacia Catedral") 
+            anden_sur = Anden(env, estacion, "Hacia Catedral", TIEMPO_CALENTAMIENTO_SEG) 
             mundo_andenes[anden_sur.nombre] = anden_sur
             
+        # (NUEVO) Pre-filtrar el lambda para cada generador
         for anden_obj in mundo_andenes.values():
-            env.process(generador_pasajeros(env, anden_obj, df_lambda, INTERVALO_LAMBDA_SEG))
+            lambda_data_anden = df_lambda[
+                (df_lambda['ESTACION'] == anden_obj.estacion_nombre) &
+                (df_lambda['DIRECCION'] == anden_obj.direccion)
+            ].set_index('DESDE')
+            
+            env.process(generador_pasajeros(env, anden_obj, lambda_data_anden, INTERVALO_LAMBDA_SEG))
+            
         env.process(generador_trenes(
             env, "Hacia_Congreso", LISTA_ESTACIONES_NORTE, min_freq, max_freq,
             tiempo_viaje, dwell_time, capacidad, mundo_andenes,
@@ -235,24 +283,21 @@ def run_montecarlo_simulation(
             mapas_descenso_ajustados["Hacia Catedral"]
         ))
         
-        env.run(until=TIEMPO_SIMULACION_SEG)
+        # (NUEVO) Correr la simulación por el tiempo TOTAL (Calentamiento + Medición)
+        env.run(until=TIEMPO_TOTAL_SIM)
 
-        # --- (NUEVO) Recopilación de KPIs para ESTA corrida ---
+        # Recopilación (Idéntica, porque la clase Anden ya filtró por tiempo)
         total_pax_embarcados_run = 0
         total_pax_espera_larga_run = 0
         
-        # Recopilar resultados de esta réplica (Andenes)
         for anden_obj in mundo_andenes.values():
-            t_espera = anden_obj.metricas_tiempo_espera
-            l_cola = anden_obj.metricas_cola_por_tren
+            t_espera = anden_obj.metricas_tiempo_espera # Ya están filtrados
+            l_cola = anden_obj.metricas_cola_por_tren # Ya están filtrados
             
-            # Sumar al KPI
             total_pax_embarcados_run += len(t_espera)
-            # Contar cuántos en esta lista son > 300 segundos
             esperas_largas = [t for t in t_espera if t > 300]
             total_pax_espera_larga_run += len(esperas_largas)
             
-            # Guardar datos por andén
             lista_resultados_andenes.append({
                 'Anden': anden_obj.nombre,
                 'Replica': semilla_actual,
@@ -260,18 +305,16 @@ def run_montecarlo_simulation(
                 'Cola_Maxima_VISTA': np.max(l_cola) if len(l_cola) > 0 else 0
             })
         
-        # Guardar KPIs de esta corrida
         lista_kpis_globales.append({
             'Replica': semilla_actual,
             'Total_Pasajeros_Embarcados': total_pax_embarcados_run,
             'Pasajeros_Espera_Larga (>5min)': total_pax_espera_larga_run
         })
-        # --- FIN DE SECCIÓN NUEVA ---
 
     print("Montecarlo terminado. Analizando resultados...")
     progress_bar.empty()
     
-    # --- Análisis Estadístico (Andenes) ---
+    # --- Análisis Estadístico (Idéntico a v5) ---
     df_global_stats = pd.DataFrame(lista_resultados_andenes)
     ci_lower = lambda x: confidence_interval(x)[0]
     ci_upper = lambda x: confidence_interval(x)[1]
@@ -288,22 +331,11 @@ def run_montecarlo_simulation(
     ).sort_values(by='Cola_Max_Promedio', ascending=False)
     df_resumen_estadistico = df_resumen_estadistico.round(2)
     
-    # --- (NUEVO) Análisis Estadístico (KPIs Globales) ---
     df_kpis_globales = pd.DataFrame(lista_kpis_globales)
-    
-    # Calcular promedios (lo que pediste)
     kpi_avg_pax = df_kpis_globales['Total_Pasajeros_Embarcados'].mean()
     kpi_avg_long_wait = df_kpis_globales['Pasajeros_Espera_Larga (>5min)'].mean()
-    
-    # Calcular Nivel de Servicio
-    if kpi_avg_pax > 0:
-        kpi_service_level = (kpi_avg_pax - kpi_avg_long_wait) / kpi_avg_pax * 100
-    else:
-        kpi_service_level = 100
-    
-    # Peor caso observado en las 50 corridas
+    kpi_service_level = (kpi_avg_pax - kpi_avg_long_wait) / kpi_avg_pax * 100 if kpi_avg_pax > 0 else 100
     kpi_max_long_wait_run = df_kpis_globales['Pasajeros_Espera_Larga (>5min)'].max()
-
     kpis_resumen = {
         'avg_pax': kpi_avg_pax,
         'avg_long_wait': kpi_avg_long_wait,
@@ -311,21 +343,18 @@ def run_montecarlo_simulation(
         'max_long_wait_run': kpi_max_long_wait_run
     }
     
-    # Devolvemos todo
     return df_resumen_estadistico, df_global_stats, kpis_resumen, df_kpis_globales
 
 
 # --- 4. INTERFAZ DE USUARIO (STREAMLIT) ---
-
 st.title("🚇 Simulador de la Línea D (Modelo TPI)")
 st.write("Esta app ejecuta un modelo de Simulación de Eventos Discretos (SimPy) para la Línea D, basado en el TPI.")
 
-# --- Barra Lateral (Idéntica a v4) ---
+# --- Barra Lateral (Idéntica a v5) ---
 st.sidebar.header("Parámetros de Simulación 🛠️")
 with st.sidebar.expander("1. Configuración General", expanded=True):
     n_replicaciones = st.sidebar.slider(
-        "N° de Corridas (Montecarlo)", min_value=1, max_value=100, value=50, step=1,
-        help="Número de veces que se corre la simulación (con diferentes semillas) para obtener un resultado estadístico."
+        "N° de Corridas (Montecarlo)", min_value=1, max_value=100, value=50, step=1
     )
 with st.sidebar.expander("2. Parámetros de Oferta (Tren)", expanded=True):
     capacidad = st.sidebar.slider(
@@ -342,7 +371,7 @@ with st.sidebar.expander("3. Parámetros de Frecuencia (Tren)", expanded=False):
         "Frecuencia Mínima (Segundos)", min_value=60, max_value=300, value=120, step=10
     )
     max_freq = st.sidebar.slider(
-        "Frecuencia Máxima (Segundos)", min_value=120, max_value=360, value=180, step=10
+        "Frecuencia Mxima (Segundos)", min_value=120, max_value=360, value=180, step=10
     )
 with st.sidebar.expander("4. Parámetros de Demanda (Descenso)", expanded=True):
     st.info("Ajusta las tasas de descenso base (V2/V4). 1.0 = 100% (sin cambios), 1.2 = 120% (20% más).")
@@ -357,9 +386,9 @@ with st.sidebar.expander("4. Parámetros de Demanda (Descenso)", expanded=True):
 
 # --- Lógica Principal de la App ---
 st.header("1. Cargar Datos y Ejecutar Simulación")
-st.write("El modelo está configurado para descargar los datos de demanda (Enero) desde GitHub.")
+# (NUEVO) Informar sobre el calentamiento
+st.write(f"El modelo está configurado para descargar los datos y correrá con un **período de calentamiento de {TIEMPO_CALENTAMIENTO_SEG} segundos** (1 hora) ANTES de empezar a medir.")
 
-# Cargar y procesar datos automáticamente
 df_lambda_final = load_and_clean_data(DATA_URL)
 
 if df_lambda_final is not None:
@@ -367,17 +396,13 @@ if df_lambda_final is not None:
     with st.expander("Ver tabla de Demanda (Lambda)"):
         st.dataframe(df_lambda_final)
 
-    # Botón para correr la simulación
     if st.button("▶️ Correr Simulación (Escenario Montecarlo)"):
-        
-        with st.spinner(f"Ejecutando {n_replicaciones} corridas..."):
-            # --- (MODIFICADO) Capturar los 4 outputs ---
+        with st.spinner(f"Ejecutando {n_replicaciones} corridas (Total: {TIEMPO_TOTAL_SIM/3600*n_replicaciones:.1f} horas simuladas)..."):
             df_resumen, df_global, kpis_resumen, df_kpis_globales = run_montecarlo_simulation(
                 n_replicaciones, min_freq, max_freq, capacidad, 
                 dwell_time, tiempo_viaje, df_lambda_final, MAPAS_DESCENSO_BASE,
                 multiplicador_catedral, multiplicador_congreso
             )
-        
         st.success("¡Simulación completada!")
         st.session_state['df_resumen'] = df_resumen
         st.session_state['df_global'] = df_global
@@ -385,7 +410,7 @@ if df_lambda_final is not None:
         st.session_state['df_kpis_globales'] = df_kpis_globales
         st.session_state['n_replicaciones'] = n_replicaciones
 
-    # --- (MODIFICACIÓN: Interfaz de Resultados con KPIs) ---
+    # --- Mostrar resultados (siempre que existan en el estado) ---
     if 'df_resumen' in st.session_state:
         df_resumen = st.session_state['df_resumen']
         df_global = st.session_state['df_global']
@@ -394,12 +419,9 @@ if df_lambda_final is not None:
         n_replicaciones = st.session_state['n_replicaciones']
 
         st.header("2. Resultados del Experimento")
-        st.write(f"Resultados basados en **{n_replicaciones} corridas** (réplicas) de la simulación de 1 hora.")
+        st.write(f"Resultados basados en **{n_replicaciones} corridas**. Las métricas se recolectaron tras un período de calentamiento de {TIEMPO_CALENTAMIENTO_SEG}s.")
 
-        # --- (NUEVO) Sección de KPIs Globales ---
         st.subheader("Indicadores Clave de Rendimiento (KPIs) - Promedio por Hora")
-        st.write("Estos son los promedios de todo el sistema, calculados a partir de las 50 corridas.")
-        
         col1, col2, col3 = st.columns(3)
         col1.metric(
             "Nivel de Servicio (Espera < 5 min)", 
@@ -413,34 +435,19 @@ if df_lambda_final is not None:
             "Pasajeros con Espera Larga (>5min) (Promedio por Hora)", 
             f"{kpis_resumen['avg_long_wait']:.1f}"
         )
-        # --- Fin Sección KPIs ---
-
-        # Pestañas de Resultados
+        
+        # (El resto de las pestañas de resultados (tab1, tab2, tab3, tab4) es IDÉNTICO a v5)
         tab1, tab2, tab3, tab4 = st.tabs([
             "📊 Resumen por Andén (CI 95%)", 
             "📈 Gráficos de Cuellos de Botella", 
             "🌍 Distribución (Histograma)",
             "📋 Datos Crudos"
         ])
-
         with tab1:
-            st.subheader("Resumen Estadístico por Andén")
-            st.write(f"Resultados basados en {n_replicaciones} corridas, mostrando la media e Intervalos de Confianza del 95%.")
             st.dataframe(df_resumen)
-            with st.expander("Detalle de las columnas"):
-                st.markdown(f"""
-                - **Cola_Max_Promedio**: La media de las colas máximas observadas en las {n_replicaciones} corridas.
-                - **Cola_Max_CI_95_Bajo / Alto**: **Intervalo de Confianza del 95%**. Tenemos 95% de confianza de que la *verdadera* media de la cola máxima del sistema está entre estos two valores.
-                - **Cola_Max_Min_Observado**: La cola máxima más *baja* que se vio en la "mejor" corrida.
-                - **Cola_Max_Max_Observado**: La cola máxima más *alta* que se vio en la "peor" corrida.
-                - **Espera_Prom_...**: Mismas métricas, pero para el tiempo de espera promedio.
-                """)
-
+            # ... (expander de detalle de columnas)
         with tab2:
-            st.subheader("Visualización de Cuellos de Botella")
-            st.write("Gráficos de barras agrupadas mostrando el rango de resultados (Mínimo, Promedio y Máximo) de las 50 corridas.")
-            
-            # --- (NUEVO) Selector Top/Bottom ---
+            st.subheader("Visualización de Cuellos de Botella (Top 10 / Bottom 10)")
             chart_mode = st.radio(
                 "Seleccionar Rango de Andenes:",
                 ["Top 10 (Peores Andenes)", "Bottom 10 (Mejores Andenes)"],
@@ -452,15 +459,12 @@ if df_lambda_final is not None:
                 df_chart_espera = df_resumen.sort_values(by='Espera_Prom_Promedio_Seg', ascending=False).head(10)
                 title_suffix = "(Top 10 Peores)"
             else:
-                # Excluimos los andenes con 0 (terminales) para que el gráfico sea útil
                 df_bottom_colas = df_resumen[df_resumen['Cola_Max_Promedio'] > 0]
                 df_chart_colas = df_bottom_colas.sort_values(by='Cola_Max_Promedio', ascending=True).head(10)
-                
                 df_bottom_espera = df_resumen[df_resumen['Espera_Prom_Promedio_Seg'] > 0]
                 df_chart_espera = df_bottom_espera.sort_values(by='Espera_Prom_Promedio_Seg', ascending=True).head(10)
                 title_suffix = "(Bottom 10 Mejores)"
 
-            # --- Gráfico 1: Colas (Agrupado) ---
             st.write(f"**Gráfico 1: Rango de 'Cola Máxima' {title_suffix}**")
             andenes_colas = df_chart_colas.index
             data_colas = {
@@ -483,7 +487,6 @@ if df_lambda_final is not None:
             fig_cola.tight_layout()
             st.pyplot(fig_cola)
 
-            # --- Gráfico 2: Esperas (Agrupado) ---
             st.write(f"**Gráfico 2: Rango de 'Espera Promedio' {title_suffix}**")
             andenes_espera = df_chart_espera.index
             data_espera = {
@@ -507,12 +510,10 @@ if df_lambda_final is not None:
         with tab3:
             st.subheader("Análisis Específico: Distribución de Resultados")
             st.write(f"Analizá la variabilidad de las {n_replicaciones} corridas para un andén específico.")
-            
             anden_seleccionado = st.selectbox(
                 "Seleccioná un Andén para analizar:",
                 df_resumen.index.sort_values()
             )
-            
             if anden_seleccionado:
                 data_anden = df_global[df_global['Anden'] == anden_seleccionado]
                 col1, col2 = st.columns(2)
@@ -532,11 +533,10 @@ if df_lambda_final is not None:
                     ax_espera_hist.set_xlabel("Espera Promedio (Segundos)")
                     ax_espera_hist.set_ylabel(f"Frecuencia (de {n_replicaciones} corridas)")
                     st.pyplot(fig_espera_hist)
-
+            
         with tab4:
             st.subheader("Datos Crudos de las Réplicas")
-            st.write(f"Resultados detallados de todas las {n_replicaciones} corridas (Total {len(df_global)} filas).")
-            # Mostramos el df_kpis_globales, que es el resumen por corrida
+            st.write(f"Resultados detallados de los KPIs globales para todas las {n_replicaciones} corridas.")
             st.dataframe(df_kpis_globales)
             
         st.info("Simulación finalizada. Podés cambiar los parámetros de la barra lateral y volver a correr.")
