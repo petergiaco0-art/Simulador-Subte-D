@@ -226,7 +226,7 @@ def confidence_interval(data):
 def run_montecarlo_simulation(
     n_replicaciones, min_freq, max_freq, capacidad, dwell_time, tiempo_viaje, 
     df_lambda, mapas_descenso_base, 
-    multiplicador_catedral, multiplicador_congreso
+    multiplicador_catedral, multiplicador_congreso, multiplicador_demanda
     ):
     
     print(f"Iniciando Montecarlo con {n_replicaciones} réplicas...")
@@ -243,7 +243,10 @@ def run_montecarlo_simulation(
             for estacion, tasa in mapas_descenso_base["Hacia Congreso"].items()
         }
     }
-    
+    # (NUEVO) Aplicar multiplicador de demanda al DataFrame de Lambda
+    df_lambda_ajustado = df_lambda.copy()
+    df_lambda_ajustado['pasajeros_PROMEDIO_lambda'] = df_lambda_ajustado['pasajeros_PROMEDIO_lambda'] * multiplicador_demanda
+    print(f"Multiplicador de demanda aplicado: {multiplicador_demanda:.1f}x")
     progress_bar = st.progress(0, text="Iniciando simulación...")
 
     # Bucle de Replicación
@@ -266,8 +269,8 @@ def run_montecarlo_simulation(
         # (NUEVO) Pre-filtrar el lambda para cada generador
         for anden_obj in mundo_andenes.values():
             lambda_data_anden = df_lambda[
-                (df_lambda['ESTACION'] == anden_obj.estacion_nombre) &
-                (df_lambda['DIRECCION'] == anden_obj.direccion)
+                (df_lambda_ajustado['ESTACION'] == anden_obj.estacion_nombre) &
+                (df_lambda_ajustado['DIRECCION'] == anden_obj.direccion)
             ].set_index('DESDE')
             
             env.process(generador_pasajeros(env, anden_obj, lambda_data_anden, INTERVALO_LAMBDA_SEG))
@@ -383,6 +386,22 @@ with st.sidebar.expander("4. Parámetros de Demanda (Descenso)", expanded=True):
         "Multiplicador Descenso (H. Congreso)", 
         min_value=0.5, max_value=2.0, value=1.0, step=0.05
     )
+with st.sidebar.expander("5. Multiplicador de Demanda (Arribos)", expanded=True):
+    st.warning("⚠️ CRÍTICO: Multiplica la tasa de llegada de pasajeros (λ). Simula aumentos de demanda.")
+    st.write("**Escenarios sugeridos:**")
+    st.write("- 1.0 = Demanda actual (Base)")
+    st.write("- 1.5 = Evento especial (+50%)")
+    st.write("- 2.5 = Mes de alta demanda (+150%)")
+    st.write("- 5.0 = Escenario extremo de estrés")
+    
+    multiplicador_demanda = st.sidebar.slider(
+        "Multiplicador de Demanda (λ)", 
+        min_value=1.0, max_value=5.0, value=1.0, step=0.1,
+        help="Multiplica la cantidad de pasajeros que llegan por hora. 2.0 = el doble de demanda."
+    )
+    
+    st.info(f"📊 Con multiplicador {multiplicador_demanda:.1f}x, se espera ~{multiplicador_demanda * 8000:.0f} pax/hora (aprox)")
+
 
 # --- Lógica Principal de la App ---
 st.header("1. Cargar Datos y Ejecutar Simulación")
@@ -401,7 +420,7 @@ if df_lambda_final is not None:
             df_resumen, df_global, kpis_resumen, df_kpis_globales = run_montecarlo_simulation(
                 n_replicaciones, min_freq, max_freq, capacidad, 
                 dwell_time, tiempo_viaje, df_lambda_final, MAPAS_DESCENSO_BASE,
-                multiplicador_catedral, multiplicador_congreso
+                multiplicador_catedral, multiplicador_congreso, multiplicador_demanda
             )
         st.success("¡Simulación completada!")
         st.session_state['df_resumen'] = df_resumen
@@ -420,6 +439,19 @@ if df_lambda_final is not None:
 
         st.header("2. Resultados del Experimento")
         st.write(f"Resultados basados en **{n_replicaciones} corridas**. Las métricas se recolectaron tras un período de calentamiento de {TIEMPO_CALENTAMIENTO_SEG}s.")
+
+        st.header("2. Resultados del Experimento")
+        st.write(f"Resultados basados en **{n_replicaciones} corridas**. Las métricas se recolectaron tras un período de calentamiento de {TIEMPO_CALENTAMIENTO_SEG}s.")
+
+# (NUEVO) Mostrar el escenario de demanda
+if multiplicador_demanda == 1.0:
+    st.info("📊 **Escenario: Demanda Base** (sin multiplicador)")
+elif multiplicador_demanda <= 1.5:
+    st.warning(f"📊 **Escenario: Evento Especial** (Demanda x{multiplicador_demanda:.1f})")
+elif multiplicador_demanda <= 2.5:
+    st.warning(f"📊 **Escenario: Mes de Alta Demanda** (Demanda x{multiplicador_demanda:.1f})")
+else:
+    st.error(f"⚠️ **Escenario: Estrés Extremo** (Demanda x{multiplicador_demanda:.1f})")
 
         st.subheader("Indicadores Clave de Rendimiento (KPIs) - Promedio por Hora")
         col1, col2, col3 = st.columns(3)
