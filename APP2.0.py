@@ -469,11 +469,11 @@ else:
         )
         
         # (El resto de las pestañas de resultados (tab1, tab2, tab3, tab4) es IDÉNTICO a v5)
-        tab1, tab2, tab3, tab4 = st.tabs([
-            "📊 Resumen por Andén (CI 95%)", 
-            "📈 Gráficos de Cuellos de Botella", 
-            "🌍 Distribución (Histograma)",
-            "📋 Datos Crudos"
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "📊 Resumen por Andén (CI 95%)", 
+        "📈 Gráficos de Cuellos de Botella", 
+        "🌍 Distribución (Histograma)",
+        "📋 Datos Crudos"
         ])
         with tab1:
             st.dataframe(df_resumen)
