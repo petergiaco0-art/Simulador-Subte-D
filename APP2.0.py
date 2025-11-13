@@ -453,7 +453,7 @@ elif multiplicador_demanda <= 2.5:
 else:
     st.error(f"⚠️ **Escenario: Estrés Extremo** (Demanda x{multiplicador_demanda:.1f})")
 
-        st.subheader("Indicadores Clave de Rendimiento (KPIs) - Promedio por Hora")
+    st.subheader("Indicadores Clave de Rendimiento (KPIs) - Promedio por Hora")
         col1, col2, col3 = st.columns(3)
         col1.metric(
             "Nivel de Servicio (Espera < 5 min)", 
