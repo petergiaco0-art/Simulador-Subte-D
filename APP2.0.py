@@ -454,18 +454,18 @@ else:
     st.error(f"⚠️ **Escenario: Estrés Extremo** (Demanda x{multiplicador_demanda:.1f})")
 
     st.subheader("Indicadores Clave de Rendimiento (KPIs) - Promedio por Hora")
-        col1, col2, col3 = st.columns(3)
-        col1.metric(
-            "Nivel de Servicio (Espera < 5 min)", 
-            f"{kpis_resumen['service_level_percent']:.2f} %"
+    col1, col2, col3 = st.columns(3)
+    col1.metric(
+        "Nivel de Servicio (Espera < 5 min)", 
+        f"{kpis_resumen['service_level_percent']:.2f} %"
         )
-        col2.metric(
-            "Pasajeros Embarcados (Promedio por Hora)", 
-            f"{kpis_resumen['avg_pax']:.0f}"
+    col2.metric(
+        "Pasajeros Embarcados (Promedio por Hora)", 
+        f"{kpis_resumen['avg_pax']:.0f}"
         )
-        col3.metric(
-            "Pasajeros con Espera Larga (>5min) (Promedio por Hora)", 
-            f"{kpis_resumen['avg_long_wait']:.1f}"
+    col3.metric(
+        "Pasajeros con Espera Larga (>5min) (Promedio por Hora)", 
+        f"{kpis_resumen['avg_long_wait']:.1f}"
         )
         
         # (El resto de las pestañas de resultados (tab1, tab2, tab3, tab4) es IDÉNTICO a v5)
