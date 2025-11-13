@@ -268,7 +268,7 @@ def run_montecarlo_simulation(
             
         # (NUEVO) Pre-filtrar el lambda para cada generador
         for anden_obj in mundo_andenes.values():
-            lambda_data_anden = df_lambda[
+            lambda_data_anden = df_lambda_ajustado[
                 (df_lambda_ajustado['ESTACION'] == anden_obj.estacion_nombre) &
                 (df_lambda_ajustado['DIRECCION'] == anden_obj.direccion)
             ].set_index('DESDE')
