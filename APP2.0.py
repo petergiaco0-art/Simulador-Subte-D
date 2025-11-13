@@ -440,44 +440,41 @@ if df_lambda_final is not None:
         st.header("2. Resultados del Experimento")
         st.write(f"Resultados basados en **{n_replicaciones} corridas**. Las métricas se recolectaron tras un período de calentamiento de {TIEMPO_CALENTAMIENTO_SEG}s.")
 
-        st.header("2. Resultados del Experimento")
-        st.write(f"Resultados basados en **{n_replicaciones} corridas**. Las métricas se recolectaron tras un período de calentamiento de {TIEMPO_CALENTAMIENTO_SEG}s.")
+        # (NUEVO) Mostrar el escenario de demanda
+        if multiplicador_demanda == 1.0:
+            st.info("📊 **Escenario: Demanda Base** (sin multiplicador)")
+        elif multiplicador_demanda <= 1.5:
+            st.warning(f"📊 **Escenario: Evento Especial** (Demanda x{multiplicador_demanda:.1f})")
+        elif multiplicador_demanda <= 2.5:
+            st.warning(f"📊 **Escenario: Mes de Alta Demanda** (Demanda x{multiplicador_demanda:.1f})")
+        else:
+            st.error(f"⚠️ **Escenario: Estrés Extremo** (Demanda x{multiplicador_demanda:.1f})")
 
-# (NUEVO) Mostrar el escenario de demanda
-if multiplicador_demanda == 1.0:
-    st.info("📊 **Escenario: Demanda Base** (sin multiplicador)")
-elif multiplicador_demanda <= 1.5:
-    st.warning(f"📊 **Escenario: Evento Especial** (Demanda x{multiplicador_demanda:.1f})")
-elif multiplicador_demanda <= 2.5:
-    st.warning(f"📊 **Escenario: Mes de Alta Demanda** (Demanda x{multiplicador_demanda:.1f})")
-else:
-    st.error(f"⚠️ **Escenario: Estrés Extremo** (Demanda x{multiplicador_demanda:.1f})")
-
-    st.subheader("Indicadores Clave de Rendimiento (KPIs) - Promedio por Hora")
-    col1, col2, col3 = st.columns(3)
-    col1.metric(
-        "Nivel de Servicio (Espera < 5 min)", 
-        f"{kpis_resumen['service_level_percent']:.2f} %"
+        st.subheader("Indicadores Clave de Rendimiento (KPIs) - Promedio por Hora")
+        col1, col2, col3 = st.columns(3)
+        col1.metric(
+            "Nivel de Servicio (Espera < 5 min)", 
+            f"{kpis_resumen['service_level_percent']:.2f} %"
         )
-    col2.metric(
-        "Pasajeros Embarcados (Promedio por Hora)", 
-        f"{kpis_resumen['avg_pax']:.0f}"
+        col2.metric(
+            "Pasajeros Embarcados (Promedio por Hora)", 
+            f"{kpis_resumen['avg_pax']:.0f}"
         )
-    col3.metric(
-        "Pasajeros con Espera Larga (>5min) (Promedio por Hora)", 
-        f"{kpis_resumen['avg_long_wait']:.1f}"
+        col3.metric(
+            "Pasajeros con Espera Larga (>5min) (Promedio por Hora)", 
+            f"{kpis_resumen['avg_long_wait']:.1f}"
         )
         
-        # (El resto de las pestañas de resultados (tab1, tab2, tab3, tab4) es IDÉNTICO a v5)
-    tab1, tab2, tab3, tab4 = st.tabs([
-        "📊 Resumen por Andén (CI 95%)", 
-        "📈 Gráficos de Cuellos de Botella", 
-        "🌍 Distribución (Histograma)",
-        "📋 Datos Crudos"
+        tab1, tab2, tab3, tab4 = st.tabs([
+            "📊 Resumen por Andén (CI 95%)", 
+            "📈 Gráficos de Cuellos de Botella", 
+            "🌍 Distribución (Histograma)",
+            "📋 Datos Crudos"
         ])
+        
         with tab1:
             st.dataframe(df_resumen)
-            # ... (expander de detalle de columnas)
+            
         with tab2:
             st.subheader("Visualización de Cuellos de Botella (Top 10 / Bottom 10)")
             chart_mode = st.radio(
@@ -507,9 +504,9 @@ else:
             fig_cola, ax_cola = plt.subplots(figsize=(12, 7))
             x = np.arange(len(andenes_colas))
             width = 0.25
-            rects1 = ax_cola.bar(x - width, data_colas['Mínimo Observado'], width, label='Mínimo (Mejor Caso)', color='green')
-            rects2 = ax_cola.bar(x, data_colas['Promedio'], width, label='Promedio', color='orange')
-            rects3 = ax_cola.bar(x + width, data_colas['Máximo Observado'], width, label='Máximo (Peor Caso)', color='red')
+            ax_cola.bar(x - width, data_colas['Mínimo Observado'], width, label='Mínimo (Mejor Caso)', color='green')
+            ax_cola.bar(x, data_colas['Promedio'], width, label='Promedio', color='orange')
+            ax_cola.bar(x + width, data_colas['Máximo Observado'], width, label='Máximo (Peor Caso)', color='red')
             ax_cola.set_ylabel('N° de Pasajeros')
             ax_cola.set_title(f'Rango de "Cola Máxima" {title_suffix}')
             ax_cola.set_xticks(x)
@@ -528,8 +525,8 @@ else:
             fig_espera, ax_espera = plt.subplots(figsize=(12, 7))
             x = np.arange(len(andenes_espera))
             width = 0.35
-            rects1 = ax_espera.bar(x - width/2, data_espera['Promedio'], width, label='Promedio (de todos los promedios)', color='blue')
-            rects2 = ax_espera.bar(x + width/2, data_espera['Máximo Observado (Peor Promedio)'], width, label='Promedio Máx. Observado (Peor Corrida)', color='purple')
+            ax_espera.bar(x - width/2, data_espera['Promedio'], width, label='Promedio (de todos los promedios)', color='blue')
+            ax_espera.bar(x + width/2, data_espera['Máximo Observado (Peor Promedio)'], width, label='Promedio Máx. Observado (Peor Corrida)', color='purple')
             ax_espera.set_ylabel('Segundos')
             ax_espera.set_title(f'Rango de "Espera Promedio" {title_suffix}')
             ax_espera.set_xticks(x)
@@ -565,12 +562,12 @@ else:
                     ax_espera_hist.set_xlabel("Espera Promedio (Segundos)")
                     ax_espera_hist.set_ylabel(f"Frecuencia (de {n_replicaciones} corridas)")
                     st.pyplot(fig_espera_hist)
-            
+        
         with tab4:
             st.subheader("Datos Crudos de las Réplicas")
             st.write(f"Resultados detallados de los KPIs globales para todas las {n_replicaciones} corridas.")
             st.dataframe(df_kpis_globales)
-            
+        
         st.info("Simulación finalizada. Podés cambiar los parámetros de la barra lateral y volver a correr.")
 else:
     st.error("No se pudieron cargar los datos de Lambda. Revisa el link en DATA_URL.")
